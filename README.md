@@ -3,6 +3,8 @@
 **Escuela Colombiana de Ingeniería – Arquitecturas de Software**  
 Laboratorio de programación concurrente: condiciones de carrera, sincronización y colecciones seguras.
 
+- David Alejandro Patacon Henao
+
 ---
 
 ## Requisitos
@@ -65,6 +67,136 @@ co.eci.snake
 4. Entrega en el reporte de laboratorio **las observaciones y/o comentarios** explicando tu diseño de sincronización (qué lock, qué condición, cómo evitas _lost wakeups_).
 
 > Objetivo didáctico: practicar suspensión/continuación **sin** espera activa y consolidar el modelo de monitores en Java.
+
+### Solución Implementada — Parte I
+
+#### Diseño de Sincronización
+
+##### **1. Monitor Compartido (Lock)**
+```java
+private Object lock = new Object();
+```
+- **Único objeto** de sincronización compartido entre `Control` y todos los `PrimeFinderThread`.
+- Usado en todos los bloques `synchronized` y llamadas a `notifyAll()`.
+- **Propósito**: Garantizar exclusión mutua y coordinar la pausa/reanudación de todos los hilos trabajadores.
+
+##### **2. Variable de Estado (Condición de Pausa)**
+```java
+private volatile boolean isPaused = false;
+```
+- Bandera que indica si los hilos deben pausarse.
+- Marcada como `volatile` para garantizar visibilidad entre hilos.
+- **Control** la modifica; **PrimeFinderThread** la consulta.
+
+##### **3. Contador Atómico de Primos**
+```java
+private AtomicInteger primesCount = new AtomicInteger(0);
+```
+- Contador thread-safe compartido entre todos los hilos.
+- Se incrementa cada vez que se encuentra un primo usando `incrementAndGet()`.
+- No requiere sincronización adicional gracias a la atomicidad intrínseca de `AtomicInteger`.
+
+---
+
+#### Flujo de Ejecución
+
+##### **En Control.run():**
+
+1. **Inicialización**: Inicia los 3 `PrimeFinderThread` con `start()`.
+
+2. **Ciclo de pausas periódicas**:
+   ```java
+   while (algunThreadVivo()) {
+       Thread.sleep(TMILISECONDS);           // Esperar 5000ms
+       isPaused = true;                       // Señalar pausa
+       System.out.println("Primos: " + primesCount.get());
+       System.out.println("Presione Enter...");
+       sc.nextLine();                         // Esperar input del usuario
+       
+       synchronized (lock) {
+           isPaused = false;                  // Señalar reanudación
+           lock.notifyAll();                  // Despertar a TODOS los hilos
+       }
+   }
+   ```
+
+##### **En PrimeFinderThread.run():**
+
+Antes de procesar cada número, **verifica si debe pausarse**:
+```java
+for (int i = a; i < b; i++) {
+    synchronized (lock) {
+        while (control.isPaused()) {
+            lock.wait();  // Se suspende aquí hasta notifyAll()
+        }
+    }
+    
+    if (isPrime(i)) {
+        primes.add(i);
+        primesCount.incrementAndGet();  // Thread-safe
+    }
+}
+```
+
+---
+
+#### Mecanismos Clave
+
+##### **1. Evitando Busy-Waiting**
+**NO se usa** espera activa como `while(isPaused) {}`  
+**SE usa** `wait()` que libera el lock y suspende el hilo hasta ser notificado
+
+##### **2. Prevención de Lost Wakeups**
+```java
+while (control.isPaused()) {  // ← WHILE, no IF
+    lock.wait();
+}
+```
+- El **`while`** en lugar de `if` garantiza que al despertar se **re-evalúe la condición**.
+- Protege contra:
+  - **Spurious wakeups** (despertares falsos del sistema).
+  - **Condiciones de carrera** donde `isPaused` podría cambiar entre el despertar y la verificación.
+
+##### **3. Sincronización Correcta**
+- **Mismo monitor**: Tanto `Control` como `PrimeFinderThread` usan el **mismo objeto `lock`**.
+- **Atomicidad**: `notifyAll()` se llama dentro del bloque `synchronized` después de cambiar `isPaused`.
+- **Orden correcto**:
+  1. Control adquiere lock
+  2. Control cambia `isPaused = false`
+  3. Control llama `notifyAll()`
+  4. Control libera lock
+  5. Los trabajadores se despiertan, re-verifican condición, y continúan
+
+##### **4. Broadcast vs. Signal**
+- Se usa **`notifyAll()`** en lugar de `notify()` porque hay **múltiples hilos (3)** esperando.
+- `notifyAll()` despierta a **todos** los hilos trabajadores simultáneamente.
+
+---
+
+#### Parámetros de Configuración
+
+```java
+private final static int NTHREADS = 3;          // Número de hilos trabajadores
+private final static int MAXVALUE = 300000000;  // Rango máximo de búsqueda
+private final static int TMILISECONDS = 5000;   // Intervalo de pausa (5s)
+```
+
+#### Ejecución
+
+```bash
+mvn clean compile
+mvn exec:java -Dexec.mainClass="co.eci.pathfinder.Main"
+```
+
+**Salida esperada:**
+```
+Numero de primos encontrados hasta ahora: 12345
+Presione Enter para continuar...
+[usuario presiona ENTER]
+Numero de primos encontrados hasta ahora: 45678
+Presione Enter para continuar...
+...
+```
 
 ---
 

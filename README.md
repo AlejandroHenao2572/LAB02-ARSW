@@ -208,8 +208,6 @@ Presione Enter para continuar...
 
 El diseño de SnakeRace implementa un modelo de **concurrencia basado en hilos independientes**, donde cada serpiente opera de forma autónoma en su propio hilo de ejecución. A continuación se analiza en detalle cómo cada clase contribuye a esta arquitectura concurrente:
 
----
-
 ##### **A. SnakeRunner — Autonomía mediante Runnable**
 
 La clase `SnakeRunner` es el **núcleo de la autonomía** de cada serpiente. Implementa la interfaz `Runnable`, lo que permite que cada instancia se ejecute en un hilo separado.
@@ -289,7 +287,6 @@ La clase `Snake` representa el **estado de una serpiente individual** y es acced
      }
      ```
 
----
 
 ##### **C. Board — Coordinación mediante Sincronización de Monitor**
 
@@ -356,7 +353,6 @@ El `Board` es el **recurso compartido** donde todas las serpientes interactúan.
    - Usa colecciones **ordinarias** (no `ConcurrentHashMap`/`CopyOnWriteArraySet`).
    - La sincronización externa via `synchronized` es suficiente y más eficiente.
 
----
 
 ##### **D. GameClock — Control de ciclo de juego con estados atómicos**
 
@@ -404,5 +400,73 @@ El `Board` es el **recurso compartido** donde todas las serpientes interactúan.
      public void pause()  { state.set(GameState.PAUSED); }
      public void resume() { state.set(GameState.RUNNING); }
      ```
+
+#### 1.2) Identificación de condiciones de carrera
+
+A pesar de la estrategia de sincronización implementada, existen **condiciones de carrera potenciales y reales** en el código.
+
+
+#### ** A. Operación compuesta check-then-act en Snake.turn()**
+
+**Ubicación:** [Snake.java](src/main/java/co/eci/snake/core/Snake.java) líneas 21-30
+
+**Código problemático:**
+```java
+public void turn(Direction dir) {
+    if ((direction == Direction.UP && dir == Direction.DOWN) ||
+        (direction == Direction.DOWN && dir == Direction.UP) ||
+        (direction == Direction.LEFT && dir == Direction.RIGHT) ||
+        (direction == Direction.RIGHT && dir == Direction.LEFT)) {
+        return;  // ← CHECK: lee direction
+    }
+    this.direction = dir;  // ← ACT: escribe direction
+}
+```
+
+**Escenario de race condition:**
+
+1. **Hilo UI (teclado)** llama `turn(Direction.LEFT)` cuando `direction == Direction.UP`
+2. **Hilo SnakeRunner** llama `turn(Direction.DOWN)` simultáneamente
+3. **Posible secuencia intercalada:**
+
+   ```
+   T=0: UI lee direction (UP) → Pasa validación 
+   T=1: SnakeRunner lee direction (UP) → Pasa validación
+   T=2: UI escribe direction = LEFT
+   T=3: SnakeRunner escribe direction = DOWN  ← SOBRESCRIBE
+   ```
+
+4. **Resultado:** La dirección `LEFT` del jugador se pierde, aplicándose `DOWN` en su lugar.
+
+- **Impacto en UX:** El jugador presiona una tecla y la serpiente no responde o gira incorrectamente.
+- **Frecuencia:** Baja en juego normal, pero aumenta con múltiples serpientes controladas manualmente.
+
+
+##### **B. Acceso no sincronizado a Snake.body desde múltiples hilos**
+
+**Ubicación:** [Snake.java](src/main/java/co/eci/snake/core/Snake.java)
+
+**Código problemático:**
+```java
+private final Deque<Position> body = new ArrayDeque<>();  // NO thread-safe
+
+// Método llamado desde SnakeRunner (hilo autónomo)
+public void advance(Position newHead, boolean grow) {
+    body.addFirst(newHead);                        // ← ESCRITURA
+    if (grow) maxLength++;
+    while (body.size() > maxLength) body.removeLast();  // ← MODIFICACIÓN
+}
+
+// Método llamado desde hilo de UI/renderizado
+public Deque<Position> snapshot() { 
+    return new ArrayDeque<>(body);  // ← LECTURA durante iteración
+}
+```
+
+**Escenario de race condition:**
+
+1. **Hilo SnakeRunner** ejecuta `advance()` → modifica `body` (addFirst, removeLast)
+2. **Hilo de renderizado** ejecuta `snapshot()` → itera sobre `body` para copiar
+3. **ArrayDeque NO es thread-safe** → estructura interna puede estar en estado inconsistente
 
 

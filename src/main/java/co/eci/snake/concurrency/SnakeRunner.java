@@ -1,10 +1,11 @@
 package co.eci.snake.concurrency;
 
+import java.util.concurrent.ThreadLocalRandom;
+
 import co.eci.snake.core.Board;
 import co.eci.snake.core.Direction;
 import co.eci.snake.core.Snake;
-
-import java.util.concurrent.ThreadLocalRandom;
+import co.eci.snake.core.Board.MoveResult;
 
 public final class SnakeRunner implements Runnable {
   private final Snake snake;

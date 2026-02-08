@@ -204,79 +204,205 @@ Presione Enter para continuar...
 
 ### 1) Análisis de concurrencia
 
-- Explica **cómo** el código usa hilos para dar autonomía a cada serpiente.
-- **Identifica** y documenta en **`el reporte de laboratorio`**:
-  - Posibles **condiciones de carrera**.
-  - **Colecciones** o estructuras **no seguras** en contexto concurrente.
-  - Ocurrencias de **espera activa** (busy-wait) o de sincronización innecesaria.
+#### 1.1) Uso de hilos para autonomía de serpientes y estrategia de concurrencia
 
-### 2) Correcciones mínimas y regiones críticas
-
-- **Elimina** esperas activas reemplazándolas por **señales** / **estados** o mecanismos de la librería de concurrencia.
-- Protege **solo** las **regiones críticas estrictamente necesarias** (evita bloqueos amplios).
-- Justifica en **`el reporte de laboratorio`** cada cambio: cuál era el riesgo y cómo lo resuelves.
-
-### 3) Control de ejecución seguro (UI)
-
-- Implementa la **UI** con **Iniciar / Pausar / Reanudar** (ya existe el botón _Action_ y el reloj `GameClock`).
-- Al **Pausar**, muestra de forma **consistente** (sin _tearing_):
-  - La **serpiente viva más larga**.
-  - La **peor serpiente** (la que **primero murió**).
-- Considera que la suspensión **no es instantánea**; coordina para que el estado mostrado no quede “a medias”.
-
-### 4) Robustez bajo carga
-
-- Ejecuta con **N alto** (`-Dsnakes=20` o más) y/o aumenta la velocidad.
-- El juego **no debe romperse**: sin `ConcurrentModificationException`, sin lecturas inconsistentes, sin _deadlocks_.
-- Si habilitas **teleports** y **turbo**, verifica que las reglas no introduzcan carreras.
-
-> Entregables detallados más abajo.
+El diseño de SnakeRace implementa un modelo de **concurrencia basado en hilos independientes**, donde cada serpiente opera de forma autónoma en su propio hilo de ejecución. A continuación se analiza en detalle cómo cada clase contribuye a esta arquitectura concurrente:
 
 ---
 
-## Entregables
+##### **A. SnakeRunner — Autonomía mediante Runnable**
 
-1. **Código fuente** funcionando en **Java 21**.
-2. Todo de manera clara en **`**el reporte de laboratorio**`** con:
-   - Data races encontradas y su solución.
-   - Colecciones mal usadas y cómo se protegieron (o sustituyeron).
-   - Esperas activas eliminadas y mecanismo utilizado.
-   - Regiones críticas definidas y justificación de su **alcance mínimo**.
-3. UI con **Iniciar / Pausar / Reanudar** y estadísticas solicitadas al pausar.
+La clase `SnakeRunner` es el **núcleo de la autonomía** de cada serpiente. Implementa la interfaz `Runnable`, lo que permite que cada instancia se ejecute en un hilo separado.
 
----
+**Características clave:**
 
-## Criterios de evaluación (10)
+1. **Bucle de ejecución independiente:**
+   ```java
+   public void run() {
+       try {
+           while (!Thread.currentThread().isInterrupted()) {
+               maybeTurn();
+               var res = board.step(snake);
+               // Lógica de respuesta a colisiones y turbos
+               Thread.sleep(sleep);
+           }
+       } catch (InterruptedException ie) {
+           Thread.currentThread().interrupt();
+       }
+   }
+   ```
+   - Cada serpiente ejecuta su propio ciclo infinito **sin interferencia directa** de otras serpientes.
+   - El hilo verifica `isInterrupted()` para detectar señales de terminación limpia.
+   - `Thread.sleep()` controla la velocidad de movimiento (80ms base, 40ms en turbo).
 
-- (3) **Concurrencia correcta**: sin data races; sincronización bien localizada.
-- (2) **Pausa/Reanudar**: consistencia visual y de estado.
-- (2) **Robustez**: corre **con N alto** y sin excepciones de concurrencia.
-- (1.5) **Calidad**: estructura clara, nombres, comentarios; sin _code smells_ obvios.
-- (1.5) **Documentación**: **`reporte de laboratorio`** claro, reproducible;
+2. **Decisiones autónomas:**
+   - **`maybeTurn()`**: Genera giros aleatorios con probabilidad del 10% (5% en turbo).
+   - **`randomTurn()`**: Selecciona una dirección aleatoria al chocar con obstáculos.
+   - La IA de cada serpiente es completamente independiente y no coordina con otras.
 
----
-
-## Tips y configuración útil
-
-- **Número de serpientes**: `-Dsnakes=N` al ejecutar.
-- **Tamaño del tablero**: cambiar el constructor `new Board(width, height)`.
-- **Teleports / Turbo**: editar `Board.java` (métodos de inicialización y reglas en `step(...)`).
-- **Velocidad**: ajustar `GameClock` (tick) o el `sleep` del `SnakeRunner` (incluye modo turbo).
-
----
-
-## Cómo correr pruebas
-
-```bash
-mvn clean verify
-```
-
-Incluye compilación y ejecución de pruebas JUnit. Si tienes análisis estático, ejecútalo en `verify` o `site` según tu `pom.xml`.
+3. **Gestión de estado local:**
+   - `turboTicks`: Contador local que controla la duración del modo turbo (100 ticks).
+   - No requiere sincronización porque es **privado al hilo**.
 
 ---
 
-## Créditos
+##### **B. Snake — Estado mutable con visibilidad garantizada**
 
-Este laboratorio es una adaptación modernizada del ejercicio **SnakeRace** de ARSW. El enunciado de actividades se conserva para mantener los objetivos pedagógicos del curso.
+La clase `Snake` representa el **estado de una serpiente individual** y es accedida concurrentemente por:
+1. El hilo de `SnakeRunner` (movimientos autónomos).
+2. El hilo de eventos de UI (control de jugador vía teclado).
+3. El hilo de renderizado (lectura del estado para dibujado).
 
-**Base construida por el Ing. Javier Toquica.**
+**Estrategia de concurrencia:**
+
+1. **Dirección volátil:**
+   ```java
+   private volatile Direction direction;
+   ```
+   - **`volatile`** garantiza **visibilidad inmediata** entre hilos.
+   - Cuando el jugador presiona una tecla (hilo UI), el cambio en `direction` es visible instantáneamente para el hilo `SnakeRunner`.
+
+2. **Validación de giros:**
+   ```java
+   public void turn(Direction dir) {
+       if ((direction == Direction.UP && dir == Direction.DOWN) ||
+           (direction == Direction.DOWN && dir == Direction.UP) ||
+           (direction == Direction.LEFT && dir == Direction.RIGHT) ||
+           (direction == Direction.RIGHT && dir == Direction.LEFT)) {
+           return; // Evitar giros de 180°
+       }
+       this.direction = dir;
+   }
+   ```
+   - **No usa `synchronized`** porque `volatile` es suficiente para lecturas/escrituras atómicas de referencias.
+   - El método `turn()` previene giros ilegales (180°).
+
+3. **Cuerpo de la serpiente (no sincronizado):**
+   ```java
+   private final Deque<Position> body = new ArrayDeque<>();
+   ```
+   - **No está sincronizado internamente** porque solo se modifica desde el hilo `SnakeRunner` via `advance()`.
+   - `snapshot()` retorna una **copia defensiva** para renderizado seguro:
+     ```java
+     public Deque<Position> snapshot() { 
+         return new ArrayDeque<>(body); 
+     }
+     ```
+
+---
+
+##### **C. Board — Coordinación mediante Sincronización de Monitor**
+
+El `Board` es el **recurso compartido** donde todas las serpientes interactúan. Gestiona:
+- Posiciones de ratones, obstáculos, turbos y teleports.
+- Detección de colisiones y eventos de juego.
+
+**Estrategia de sincronización:**
+
+1. **Método `step()` sincronizado:**
+   ```java
+   public synchronized MoveResult step(Snake snake) {
+       // 1. Calcular siguiente posición
+       Position next = new Position(head.x() + dir.dx, head.y() + dir.dy)
+                           .wrap(width, height);
+       
+       // 2. Verificar colisiones con obstáculos
+       if (obstacles.contains(next)) return MoveResult.HIT_OBSTACLE;
+       
+       // 3. Procesar teleports
+       if (teleports.containsKey(next)) {
+           next = teleports.get(next);
+       }
+       
+       // 4. Consumir ratones/turbos
+       boolean ateMouse = mice.remove(next);
+       boolean ateTurbo = turbo.remove(next);
+       
+       // 5. Avanzar serpiente
+       snake.advance(next, ateMouse);
+       
+       // 6. Generar nuevos elementos
+       if (ateMouse) {
+           mice.add(randomEmpty());
+           obstacles.add(randomEmpty());
+       }
+       
+       return /* resultado */;
+   }
+   ```
+
+2. **Monitor:**
+   - **`synchronized`** en el método completo usa el lock intrínseco del objeto `Board`.
+   - **Exclusión mutua**: Solo una serpiente puede ejecutar `step()` a la vez.
+   - **Atomicidad**: Toda la secuencia (verificar colisión → modificar estado → generar elementos) es atómica.
+
+3. **Getters sincronizados con copias defensivas:**
+   ```java
+   public synchronized Set<Position> mice() { 
+       return new HashSet<>(mice); 
+   }
+   public synchronized Set<Position> obstacles() { 
+       return new HashSet<>(obstacles); 
+   }
+   ```
+   - Los hilos de renderizado obtienen **snapshots consistentes** del tablero.
+   - Previene `ConcurrentModificationException` durante iteración.
+
+4. **Colecciones internas (no thread-safe):**
+   ```java
+   private final Set<Position> mice = new HashSet<>();
+   private final Map<Position, Position> teleports = new HashMap<>();
+   ```
+   - Usa colecciones **ordinarias** (no `ConcurrentHashMap`/`CopyOnWriteArraySet`).
+   - La sincronización externa via `synchronized` es suficiente y más eficiente.
+
+---
+
+##### **D. GameClock — Control de ciclo de juego con estados atómicos**
+
+
+`GameClock` gestiona el **ciclo de actualización global** del juego
+
+**Estrategia de concurrencia:**
+
+1. **Estado atómico:**
+   ```java
+   private final AtomicReference<GameState> state = 
+       new AtomicReference<>(GameState.STOPPED);
+   ```
+   - **`AtomicReference`** permite cambios de estado **sin locks explícitos**.
+   - Garantiza que lecturas/escrituras de `state` sean atómicas.
+
+2. **Operación Compare-And-Set (CAS):**
+   ```java
+   public void start() {
+       if (state.compareAndSet(GameState.STOPPED, GameState.RUNNING)) {
+           scheduler.scheduleAtFixedRate(/* ... */);
+       }
+   }
+   ```
+   - **CAS** previene múltiples inicios concurrentes (solo el primero tiene éxito).
+   - Implementa el patrón **"check-then-act"** de forma thread-safe.
+
+3. **ScheduledExecutorService:**
+   ```java
+   private final ScheduledExecutorService scheduler = 
+       Executors.newSingleThreadScheduledExecutor();
+   ```
+   - Ejecuta el tick del juego a **intervalos regulares** (periodMillis).
+   - Usa un **único hilo del executor** (no múltiples hilos para ticks).
+
+4. **Control de pausa sin detener hilos:**
+   ```java
+   scheduler.scheduleAtFixedRate(() -> {
+       if (state.get() == GameState.RUNNING) tick.run();
+   }, 0, periodMillis, TimeUnit.MILLISECONDS);
+   ```
+   - El scheduler **siempre corre**, pero el tick solo se ejecuta si `state == RUNNING`.
+   - `pause()` y `resume()` simplemente **modifican el estado**:
+     ```java
+     public void pause()  { state.set(GameState.PAUSED); }
+     public void resume() { state.set(GameState.RUNNING); }
+     ```
+
+

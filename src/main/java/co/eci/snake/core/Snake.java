@@ -7,14 +7,20 @@ public final class Snake {
   private final Deque<Position> body = new ArrayDeque<>();
   private volatile Direction direction;
   private int maxLength = 5;
+  private final int id;
+  private final long startTime;
+  private Long deathTime = null;
+  private int miceEaten = 0;
 
-  private Snake(Position start, Direction dir) {
+  private Snake(int id, Position start, Direction dir) {
+    this.id = id;
+    this.startTime = System.currentTimeMillis();
     body.addFirst(start);
     this.direction = dir;
   }
 
-  public static Snake of(int x, int y, Direction dir) {
-    return new Snake(new Position(x, y), dir);
+  public static Snake of(int id, int x, int y, Direction dir) {
+        return new Snake(id, new Position(x, y), dir);
   }
 
   public Direction direction() { return direction; }
@@ -38,4 +44,28 @@ public final class Snake {
     if (grow) maxLength++;
     while (body.size() > maxLength) body.removeLast();
   }
+
+  // Método para registrar evento
+  public synchronized void recordMouseEaten() {
+        miceEaten++;
+  }
+
+  public synchronized void markDead() {
+        if (deathTime == null) {
+            deathTime = System.currentTimeMillis();
+        }
+  }
+
+  //Crear snapshot thread-safe
+  public synchronized SnakeStats getStats() {
+        return new SnakeStats(
+            id,
+            body.size(),
+            startTime,
+            deathTime,
+            miceEaten,
+            head()
+        );
+    }
+
 }

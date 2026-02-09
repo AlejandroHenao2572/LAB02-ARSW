@@ -3,6 +3,7 @@ package co.eci.snake.ui.legacy;
 import co.eci.snake.concurrency.SnakeRunner;
 import co.eci.snake.core.Board;
 import co.eci.snake.core.Direction;
+import co.eci.snake.core.GameController;
 import co.eci.snake.core.Position;
 import co.eci.snake.core.Snake;
 import co.eci.snake.core.engine.GameClock;
@@ -21,6 +22,10 @@ public final class SnakeApp extends JFrame {
   private final JButton actionButton;
   private final GameClock clock;
   private final java.util.List<Snake> snakes = new java.util.ArrayList<>();
+  private final StatsPanel statsPanel;
+  private final GameController controller;
+  private final java.util.concurrent.ExecutorService executor;
+  private boolean gameStarted = false;
 
   public SnakeApp() {
     super("The Snake Race");
@@ -31,24 +36,25 @@ public final class SnakeApp extends JFrame {
       int x = 2 + (i * 3) % board.width();
       int y = 2 + (i * 2) % board.height();
       var dir = Direction.values()[i % Direction.values().length];
-      snakes.add(Snake.of(x, y, dir));
+      snakes.add(Snake.of(i, x, y, dir));
     }
 
     this.gamePanel = new GamePanel(board, () -> snakes);
-    this.actionButton = new JButton("Action");
+    this.clock = new GameClock(60, () -> SwingUtilities.invokeLater(gamePanel::repaint));
+    this.controller = new GameController(snakes, clock); // NUEVO
+    this.statsPanel = new StatsPanel(controller); // NUEVO
+    this.executor = Executors.newVirtualThreadPerTaskExecutor();
+    this.actionButton = new JButton("Iniciar");
 
+    // Layout
     setLayout(new BorderLayout());
     add(gamePanel, BorderLayout.CENTER);
+    add(statsPanel, BorderLayout.NORTH); // NUEVO
     add(actionButton, BorderLayout.SOUTH);
 
     setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
     pack();
     setLocationRelativeTo(null);
-
-    this.clock = new GameClock(60, () -> SwingUtilities.invokeLater(gamePanel::repaint));
-
-    var exec = Executors.newVirtualThreadPerTaskExecutor();
-    snakes.forEach(s -> exec.submit(new SnakeRunner(s, board)));
 
     actionButton.addActionListener((ActionEvent e) -> togglePause());
 
@@ -125,16 +131,25 @@ public final class SnakeApp extends JFrame {
     }
 
     setVisible(true);
-    clock.start();
   }
 
   private void togglePause() {
-    if ("Action".equals(actionButton.getText())) {
-      actionButton.setText("Resume");
-      clock.pause();
+    if (!gameStarted) {
+      // Iniciar el juego por primera vez
+      gameStarted = true;
+      actionButton.setText("Pausar");
+      snakes.forEach(s -> executor.submit(new SnakeRunner(s, board, controller)));
+      clock.start();
+    } else if ("Pausar".equals(actionButton.getText())) {
+      // Pausar el juego
+      actionButton.setText("Reanudar");
+      controller.pause();
+      statsPanel.updateStats();
     } else {
-      actionButton.setText("Action");
-      clock.resume();
+      // Reanudar el juego
+      actionButton.setText("Pausar");
+      controller.resume();
+      statsPanel.updateStats();
     }
   }
 

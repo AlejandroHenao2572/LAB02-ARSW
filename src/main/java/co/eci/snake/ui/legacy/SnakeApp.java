@@ -226,22 +226,69 @@ public final class SnakeApp extends JFrame {
 
       // Serpientes
       var snakes = snakesSupplier.get();
-      int idx = 0;
-      for (Snake s : snakes) {
+      for (int idx = 0; idx < snakes.size(); idx++) {
+        Snake s = snakes.get(idx);
         var body = s.snapshot().toArray(new Position[0]);
+        Color base = getSnakeColor(idx);
+        
         for (int i = 0; i < body.length; i++) {
           var p = body[i];
-          Color base = (idx == 0) ? new Color(0, 170, 0) : new Color(0, 160, 180);
           int shade = Math.max(0, 40 - i * 4);
           g2.setColor(new Color(
               Math.min(255, base.getRed() + shade),
               Math.min(255, base.getGreen() + shade),
               Math.min(255, base.getBlue() + shade)));
           g2.fillRect(p.x() * cell + 2, p.y() * cell + 2, cell - 4, cell - 4);
+          
+          // Dibujar número en la cabeza
+          if (i == 0 && body.length > 0) {
+            g2.setColor(Color.WHITE);
+            g2.setFont(new Font("Arial", Font.BOLD, 12));
+            String number = String.valueOf(idx);
+            FontMetrics fm = g2.getFontMetrics();
+            int textWidth = fm.stringWidth(number);
+            int textHeight = fm.getAscent();
+            g2.drawString(number, 
+                p.x() * cell + (cell - textWidth) / 2, 
+                p.y() * cell + (cell + textHeight) / 2 - 2);
+          }
         }
-        idx++;
       }
       g2.dispose();
+    }
+    
+    private Color getSnakeColor(int index) {
+      // Paleta de colores distintos para hasta 20 serpientes
+      Color[] colors = {
+          new Color(0, 170, 0),      // Verde
+          new Color(0, 160, 180),    // Cyan
+          new Color(220, 50, 50),    // Rojo
+          new Color(255, 165, 0),    // Naranja
+          new Color(138, 43, 226),   // Violeta
+          new Color(255, 20, 147),   // Rosa
+          new Color(70, 130, 180),   // Azul acero
+          new Color(34, 139, 34),    // Verde bosque
+          new Color(218, 165, 32),   // Dorado
+          new Color(148, 0, 211),    // Púrpura oscuro
+          new Color(0, 128, 128),    // Verde azulado
+          new Color(210, 105, 30),   // Chocolate
+          new Color(100, 149, 237),  // Azul cielo
+          new Color(154, 205, 50),   // Verde amarillento
+          new Color(199, 21, 133),   // Magenta medio
+          new Color(32, 178, 170),   // Verde mar claro
+          new Color(255, 99, 71),    // Tomate
+          new Color(106, 90, 205),   // Azul pizarra
+          new Color(72, 209, 204),   // Turquesa medio
+          new Color(255, 140, 0)     // Naranja oscuro
+      };
+      
+      if (index < colors.length) {
+        return colors[index];
+      }
+      
+      // Para más de 20 serpientes, generar colores usando HSB
+      float hue = (index * 137.508f) % 360 / 360f; // Golden angle para distribución uniforme
+      return Color.getHSBColor(hue, 0.7f, 0.8f);
     }
   }
 

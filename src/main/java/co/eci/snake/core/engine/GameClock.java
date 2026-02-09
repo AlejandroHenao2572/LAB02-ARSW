@@ -1,8 +1,6 @@
 package co.eci.snake.core.engine;
 
 import co.eci.snake.core.GameState;
-
-import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;

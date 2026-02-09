@@ -29,7 +29,7 @@ public final class SnakeApp extends JFrame {
 
   public SnakeApp() {
     super("The Snake Race");
-    this.board = new Board(35, 28);
+    this.board = new Board(50, 50);
 
     int N = Integer.getInteger("snakes", 2);
     for (int i = 0; i < N; i++) {

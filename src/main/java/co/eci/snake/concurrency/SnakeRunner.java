@@ -7,7 +7,6 @@ import co.eci.snake.core.Direction;
 import co.eci.snake.core.GameController;
 import co.eci.snake.core.GameState;
 import co.eci.snake.core.Snake;
-import co.eci.snake.core.Board.MoveResult;
 
 public final class SnakeRunner implements Runnable {
   private final Snake snake;

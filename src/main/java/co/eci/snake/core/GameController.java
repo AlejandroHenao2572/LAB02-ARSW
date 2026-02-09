@@ -2,7 +2,6 @@
 package co.eci.snake.core;
 
 import java.util.*;
-import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import co.eci.snake.core.engine.GameClock;
 
@@ -10,7 +9,6 @@ import co.eci.snake.core.engine.GameClock;
 public class GameController {
     private final List<Snake> snakes;
     private final GameClock clock;
-    private final CountDownLatch pauseLatch;
     private final AtomicReference<GameState> state;
     
     // Estadísticas calculadas
@@ -20,7 +18,6 @@ public class GameController {
     public GameController(List<Snake> snakes, GameClock clock) {
         this.snakes = snakes;
         this.clock = clock;
-        this.pauseLatch = new CountDownLatch(0); // Inicialmente no esperando
         this.state = new AtomicReference<>(GameState.RUNNING);
     }
     

@@ -847,20 +847,20 @@ La clase `SnakeRunner` **NO requiere correcciones** porque:
 
 `SnakeRunner` es seguro sin modificaciones.
 
-## Mejoras de UI implementadas
+## 3) Control de ejecución seguro (UI)
 
-### 1. Botón de Iniciar
+### Botón de Iniciar
 El juego ya **no comienza automáticamente**. Al ejecutar aparece un botón **"Iniciar"** que permite:
 - Controlar cuándo comienza la carrera de serpientes.
 - Los hilos de las serpientes y el reloj solo se crean al presionar el botón por primera vez.
 
-### 2. Identificación visual de serpientes
+### Identificación visual de serpientes
 Cada serpiente tiene un **color único** y su **número mostrado en la cabeza**:
 - **Paleta de 20 colores distintos** predefinidos para fácil identificación visual.
 - Para más de 20 serpientes, se generan colores automáticamente usando HSB con distribución uniforme.
 - El **número (0, 1, 2, ...)** aparece en blanco sobre la cabeza de cada serpiente.
 
-### 3. Sistema de pausa con estadísticas
+### Sistema de pausa con estadísticas
 Al pausar el juego (botón **"Pausar"** o tecla **Espacio**), se muestra un panel con estadísticas:
 - **Serpiente más larga**: ID, longitud actual y ratones comidos.
 - **Peor serpiente**: ID de la primera en morir y tiempo de supervivencia.
@@ -871,7 +871,7 @@ Al pausar el juego (botón **"Pausar"** o tecla **Espacio**), se muestra un pane
 - **`StatsPanel`**: Panel Swing que se actualiza al pausar, mostrando las estadísticas calculadas.
 - **Sincronización**: Los `SnakeRunner` verifican el estado en cada iteración con `checkAndWaitIfPaused()`, evitando busy-waiting mediante `Thread.sleep()`.
 
-### 4. Ejemplos de ejecucion
+### Ejemplos de ejecucion
 
 **Inicio del juego con botón:**  
 ![alt text](img/inicio.png)
@@ -885,3 +885,22 @@ Al pausar el juego (botón **"Pausar"** o tecla **Espacio**), se muestra un pane
 **Caso con multiples serpientes:**  
 ![alt text](img/multiplesrun.png)  
 ![alt text](img/multiplespause.png)
+
+
+## 4) Robustez bajo carga
+
+Se realizaron pruebas con hasta **50 serpientes** y aumentado la velocidad d, verificando que:
+- El juego se mantiene fluido sin bloqueos ni caídas.
+- El sistema de pausa sigue funcionando correctamente, mostrando estadísticas precisas.
+- La UI responde sin congelarse, incluso con alta concurrencia.
+
+### Capturas de pantalla bajo carga
+
+Test con 20 serpientes:  
+![alt text](img/carga20.png)
+
+Test con 50 serpientes:  
+![alt text](img/carga50.png)
+
+Test con 100 serpientes y tablero 50x50:  
+![alt text](img/carga100.png)

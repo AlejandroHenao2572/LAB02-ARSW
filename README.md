@@ -469,7 +469,7 @@ public Deque<Position> snapshot() {
 3. **ArrayDeque NO es thread-safe** → estructura interna puede estar en estado inconsistente
 
 
-#### 1.4) Colecciones y estructuras no seguras en contexto concurrente
+#### 1.3) Colecciones y estructuras no seguras en contexto concurrente
 
 El proyecto utiliza múltiples **colecciones estándar de Java** (del paquete `java.util`) que **NO son thread-safe** en contextos donde múltiples hilos las acceden concurrentemente.
 
@@ -536,8 +536,6 @@ public synchronized MoveResult step(Snake snake) {
 ```
 **Correcto:** El `synchronized` en el método garantiza exclusión mutua y atomicidad de operaciones compuestas.
 
----
-
 ##### **3. HashMap[Position] en Board.teleports**
 
 **Declaración:** [Board.java](src/main/java/co/eci/snake/core/Board.java) línea 15
@@ -564,3 +562,111 @@ public synchronized Map<Position, Position> teleports() {
 }
 ```
 **Correcto:** Lock protege todas las operaciones
+
+#### 1.4) Ocurrencias de espera activa (busy-wait) o de sincronización innecesaria
+
+El análisis del código revela que el proyecto **NO presenta casos de espera activa (busy-wait)**, utilizando correctamente los mecanismos de sincronización de Java. Sin embargo, existen áreas donde la sincronización podría optimizarse.
+
+##### **A. Ausencia de Busy-Wait**
+
+**1. SnakeRunner — Uso correcto de Thread.sleep()**
+
+**Código:** [SnakeRunner.java](src/main/java/co/eci/snake/concurrency/SnakeRunner.java) líneas 23-36
+
+```java
+@Override
+public void run() {
+    try {
+        while (!Thread.currentThread().isInterrupted()) {
+            maybeTurn();
+            var res = board.step(snake);
+            // ... lógica de juego ...
+            int sleep = (turboTicks > 0) ? turboSleepMs : baseSleepMs;
+            Thread.sleep(sleep); // Libera CPU entre iteraciones
+        }
+    } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+    }
+}
+```
+- **NO hay busy-wait**: `Thread.sleep()` suspende el hilo y libera el CPU
+- **Velocidad variable**: Ajusta el sleep según el estado (turbo: 40ms, normal: 80ms)
+- **Manejo correcto de interrupciones**: Restaura el flag de interrupción cuando se atrapa `InterruptedException`
+
+**2. GameClock — Uso eficiente de ScheduledExecutorService**
+
+**Código:** [GameClock.java](src/main/java/co/eci/snake/core/engine/GameClock.java) líneas 20-26
+
+```java
+scheduler.scheduleAtFixedRate(() -> {
+    if (state.get() == GameState.RUNNING) tick.run();
+}, 0, periodMillis, TimeUnit.MILLISECONDS);
+```
+
+- **NO hay busy-wait**: El `ScheduledExecutorService` gestiona el timing internamente 
+- **Verificación de estado ligera**: `state.get()` es O(1) mediante `AtomicReference`
+
+##### **B. Sincronización Innecesaria o Excesiva ⚠️**
+
+A pesar de la ausencia de busy-wait, existen áreas donde la sincronización es más de lo necesario**, generando posible contención de locks.
+
+**1. Board.step() — Sincronización muy robusta**
+
+**Código:** [Board.java](src/main/java/co/eci/snake/core/Board.java) líneas 38-63
+
+```java
+public synchronized MoveResult step(Snake snake) {
+    Objects.requireNonNull(snake, "snake");
+    var head = snake.head();
+    var dir = snake.direction();
+    Position next = new Position(head.x() + dir.dx, head.y() + dir.dy).wrap(width, height);
+
+    if (obstacles.contains(next)) return MoveResult.HIT_OBSTACLE; // ← Lock retenido
+
+    boolean teleported = false;
+    if (teleports.containsKey(next)) {
+        next = teleports.get(next);
+        teleported = true;
+    }
+
+    boolean ateMouse = mice.remove(next);
+    boolean ateTurbo = turbo.remove(next);
+
+    snake.advance(next, ateMouse); // ← Llama a método no sincronizado de Snake
+
+    if (ateMouse) {
+        mice.add(randomEmpty());
+        obstacles.add(randomEmpty());
+        if (ThreadLocalRandom.current().nextDouble() < 0.2) turbo.add(randomEmpty());
+    }
+
+    if (ateTurbo) return MoveResult.ATE_TURBO;
+    if (ateMouse) return MoveResult.ATE_MOUSE;
+    if (teleported) return MoveResult.TELEPORTED;
+    return MoveResult.MOVED;
+}
+```
+
+**Problema:**
+- **Lock muy grueso**: Todo el método está sincronizado (lock único para todo el tablero)
+- **Contención alta**: Con N serpientes, solo una puede ejecutar `step()` a la vez
+- **Impacto en rendimiento**: A medida que N aumenta, el tiempo de espera para acceder a `step()` puede crecer significativamente, causando retrasos en el juego.
+
+
+**2. Getters sincronizados en Board — Necesarios pero costosos**
+
+**Código:** [Board.java](src/main/java/co/eci/snake/core/Board.java) líneas 33-36
+
+```java
+public synchronized Set<Position> mice() { return new HashSet<>(mice); }
+public synchronized Set<Position> obstacles() { return new HashSet<>(obstacles); }
+public synchronized Set<Position> turbo() { return new HashSet<>(turbo); }
+public synchronized Map<Position, Position> teleports() { return new HashMap<>(teleports); }
+```
+
+**Análisis:**
+- **Necesarios**: Sin `synchronized`, se podrían copiar estados inconsistentes
+- **Costosos**: Crear copias en cada llamada (O(n) en tiempo y memoria)
+- **Frecuencia**: Llamados en cada frame de renderizado (16-60 veces por segundo)
+
+

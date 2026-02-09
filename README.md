@@ -39,7 +39,6 @@ mvn -q -DskipTests exec:java -Dsnakes=4
 - **Rayos (Turbo)**: al pisarlos, la serpiente obtiene **velocidad aumentada** temporal.
 - Movimiento con **wrap-around** (el tablero “se repite” en los bordes).
 
----
 
 ## Arquitectura (carpetas)
 
@@ -847,3 +846,42 @@ La clase `SnakeRunner` **NO requiere correcciones** porque:
    - Llama a `snake.turn()` (ya sincronizado)
 
 `SnakeRunner` es seguro sin modificaciones.
+
+## Mejoras de UI implementadas
+
+### 1. Botón de Iniciar
+El juego ya **no comienza automáticamente**. Al ejecutar aparece un botón **"Iniciar"** que permite:
+- Controlar cuándo comienza la carrera de serpientes.
+- Los hilos de las serpientes y el reloj solo se crean al presionar el botón por primera vez.
+
+### 2. Identificación visual de serpientes
+Cada serpiente tiene un **color único** y su **número mostrado en la cabeza**:
+- **Paleta de 20 colores distintos** predefinidos para fácil identificación visual.
+- Para más de 20 serpientes, se generan colores automáticamente usando HSB con distribución uniforme.
+- El **número (0, 1, 2, ...)** aparece en blanco sobre la cabeza de cada serpiente.
+
+### 3. Sistema de pausa con estadísticas
+Al pausar el juego (botón **"Pausar"** o tecla **Espacio**), se muestra un panel con estadísticas:
+- **Serpiente más larga**: ID, longitud actual y ratones comidos.
+- **Peor serpiente**: ID de la primera en morir y tiempo de supervivencia.
+
+**Implementación técnica:**
+- **`GameController`**: Coordina la pausa de todos los hilos usando una bandera de estado `AtomicReference<GameState>`.
+- **`SnakeStats`**: Record inmutable que captura el estado de cada serpiente (thread-safe).
+- **`StatsPanel`**: Panel Swing que se actualiza al pausar, mostrando las estadísticas calculadas.
+- **Sincronización**: Los `SnakeRunner` verifican el estado en cada iteración con `checkAndWaitIfPaused()`, evitando busy-waiting mediante `Thread.sleep()`.
+
+### 4. Ejemplos de ejecucion
+
+**Inicio del juego con botón:**  
+![alt text](img/inicio.png)
+
+**Juego en progreso con serpientes identificadas y panel de estadísticas:**  
+![alt text](img/juego.png)
+
+**Caso en donde todas las serpientes han muerto:**  
+![alt text](img/muertas.png)
+
+**Caso con multiples serpientes:**  
+![alt text](img/multiplesrun.png)  
+![alt text](img/multiplespause.png)

@@ -405,8 +405,7 @@ El `Board` es el **recurso compartido** donde todas las serpientes interactúan.
 
 A pesar de la estrategia de sincronización implementada, existen **condiciones de carrera potenciales y reales** en el código.
 
-
-#### ** A. Operación compuesta check-then-act en Snake.turn()**
+#### **A. Operación compuesta check-then-act en Snake.turn()**
 
 **Ubicación:** [Snake.java](src/main/java/co/eci/snake/core/Snake.java) líneas 21-30
 
@@ -417,9 +416,9 @@ public void turn(Direction dir) {
         (direction == Direction.DOWN && dir == Direction.UP) ||
         (direction == Direction.LEFT && dir == Direction.RIGHT) ||
         (direction == Direction.RIGHT && dir == Direction.LEFT)) {
-        return;  // ← CHECK: lee direction
+        return;  // CHECK: lee direction
     }
-    this.direction = dir;  // ← ACT: escribe direction
+    this.direction = dir;  // ACT: escribe direction
 }
 ```
 
@@ -442,7 +441,7 @@ public void turn(Direction dir) {
 - **Frecuencia:** Baja en juego normal, pero aumenta con múltiples serpientes controladas manualmente.
 
 
-##### **B. Acceso no sincronizado a Snake.body desde múltiples hilos**
+#### **B. Acceso no sincronizado a Snake.body desde múltiples hilos**
 
 **Ubicación:** [Snake.java](src/main/java/co/eci/snake/core/Snake.java)
 
@@ -470,3 +469,98 @@ public Deque<Position> snapshot() {
 3. **ArrayDeque NO es thread-safe** → estructura interna puede estar en estado inconsistente
 
 
+#### 1.4) Colecciones y estructuras no seguras en contexto concurrente
+
+El proyecto utiliza múltiples **colecciones estándar de Java** (del paquete `java.util`) que **NO son thread-safe** en contextos donde múltiples hilos las acceden concurrentemente.
+
+---
+
+##### **1. ArrayDeque[Position], MaxLength y direction**
+
+**Declaración:** [Snake.java](src/main/java/co/eci/snake/core/Snake.java) 
+```java
+  private final Deque<Position> body = new ArrayDeque<>();
+  private volatile Direction direction;
+  private int maxLength = 5;
+```
+
+- Hilo `SnakeRunner` ejecuta `advance(newHead, grow)` modifica el deque y aumenta `maxLength`
+- Hilo de renderizado UI ejecuta `snapshot()` → crea copia iterando sobre el deque
+- Hilo de eventos UI ejecuta `turn(Direction)` → modifica `direction`
+
+
+**Por qué NO es thread-safe:**
+
+-`ArrayDeque` usa un **array circular interno** con índices de cabeza y cola, pero no es una estructura segura en concurrencia
+- `maxLength` es un entero modificado por `advance()` sin sincronización, lo que puede llevar a condiciones de carrera si se accede desde múltiples hilos
+- `direction` es `volatile`, lo que garantiza visibilidad, pero no atomicidad de operaciones compuestas (como validación + actualización en `turn()`)
+
+
+##### **2. HashSet[Position] en Board (mice, obstacles, turbo)**
+
+**Declaración:** [Board.java](src/main/java/co/eci/snake/core/Board.java) líneas 12-14
+```java
+private final Set<Position> mice = new HashSet<>();
+private final Set<Position> obstacles = new HashSet<>();
+private final Set<Position> turbo = new HashSet<>();
+```
+
+**Contexto de uso:**
+- **Protección actual:** Todos los accesos están dentro de métodos `synchronized` 
+- **Acceso concurrente:** Múltiples hilos `SnakeRunner` compiten por el lock de `Board.step()`
+
+**Por qué NO es thread-safe:**
+
+- `HashSet` (que internamente usa `HashMap`) mantiene un **array de buckets** con listas enlazadas para manejar colisiones, pero **no sincroniza** el acceso a esta estructura.
+
+**Operaciones problemáticas (si no estuvieran sincronizadas):**
+
+1. **`remove()` concurrente:**
+   - Dos serpientes intentan comer el mismo ratón
+   - Sin sincronización, ambas podrían pasar el `contains()` y ejecutar `remove()`
+   - Resultado: Dos serpientes crecen por el mismo ratón (duplicación de puntos)
+
+2. **`add()` concurrente:**
+    - Dos serpientes generan un nuevo obstáculo en la misma posición
+    - Sin sincronización, ambas podrían agregar el mismo obstáculo sin detectar colisión
+    - Resultado: Obstáculo duplicado, pero solo uno es efectivo
+
+**Protección actual:**
+```java
+public synchronized MoveResult step(Snake snake) {
+    // ...
+    boolean ateMouse = mice.remove(next);  // ← Protegido por lock
+    // ...
+    mice.add(randomEmpty());  // ← Protegido por lock
+}
+```
+**Correcto:** El `synchronized` en el método garantiza exclusión mutua y atomicidad de operaciones compuestas.
+
+---
+
+##### **3. HashMap[Position] en Board.teleports**
+
+**Declaración:** [Board.java](src/main/java/co/eci/snake/core/Board.java) línea 15
+```java
+private final Map<Position, Position> teleports = new HashMap<>();
+```
+
+**Contexto de uso:**
+- Almacena pares de teletransportadores (entrada → salida)
+- Accedido en `step()` para verificar si la posición siguiente es un teleport
+
+**Problemas de concurrencia (hipotéticos sin sincronización):**
+
+**Protección actual:**
+```java
+public synchronized MoveResult step(Snake snake) {
+    if (teleports.containsKey(next)) {  // ← Protegido
+        next = teleports.get(next);
+    }
+}
+
+public synchronized Map<Position, Position> teleports() {
+    return new HashMap<>(teleports);  // ← Copia defensiva
+}
+```
+**Correcto:** Lock protege todas las operaciones

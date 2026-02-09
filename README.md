@@ -606,7 +606,7 @@ scheduler.scheduleAtFixedRate(() -> {
 - **NO hay busy-wait**: El `ScheduledExecutorService` gestiona el timing internamente 
 - **Verificación de estado ligera**: `state.get()` es O(1) mediante `AtomicReference`
 
-##### **B. Sincronización Innecesaria o Excesiva ⚠️**
+##### **B. Sincronización Innecesaria o Excesiva**
 
 A pesar de la ausencia de busy-wait, existen áreas donde la sincronización es más de lo necesario**, generando posible contención de locks.
 
@@ -669,4 +669,181 @@ public synchronized Map<Position, Position> teleports() { return new HashMap<>(t
 - **Costosos**: Crear copias en cada llamada (O(n) en tiempo y memoria)
 - **Frecuencia**: Llamados en cada frame de renderizado (16-60 veces por segundo)
 
+---
 
+### 2) Correcciones implementadas en regiones críticas
+
+#### **Cambios realizados:**
+
+#### **Sincronización de turn() — Elimina race condition check-then-act**
+
+**Problema:** Dos hilos podían leer `direction` simultáneamente, pasar la validación, y sobrescribirse mutuamente.
+
+**Después (corregido):**
+```java
+public synchronized void turn(Direction dir) {
+    if ((direction == Direction.UP && dir == Direction.DOWN) ||
+        (direction == Direction.DOWN && dir == Direction.UP) ||
+        (direction == Direction.LEFT && dir == Direction.RIGHT) ||
+        (direction == Direction.RIGHT && dir == Direction.LEFT)) {
+        return;
+    }
+    this.direction = dir;
+}
+```
+
+**Corrección:**
+- `synchronized` garantiza que toda la operación check-then-act es **atómica**
+- Solo un hilo puede ejecutar `turn()` a la vez
+- Elimina la posibilidad de que comandos del jugador se pierdan
+
+##### **Sincronización de advance() — Protege modificaciones a body y maxLength** 
+
+**Problema:** `ArrayDeque` no es thread-safe; modificaciones concurrentes podían corromper la estructura interna.
+
+**Después (corregido):**
+```java
+public synchronized void advance(Position newHead, boolean grow) {
+    body.addFirst(newHead);
+    if (grow) maxLength++;
+    while (body.size() > maxLength) body.removeLast();
+}
+```
+
+**Corrección:**
+- Garantiza que solo un hilo modifica `body` a la vez
+- Protege `maxLength` contra condiciones de carrera
+- Previene corrupción de la estructura de datos
+
+---
+
+##### **Sincronización de snapshot() — Protege lectura durante iteración** 
+
+**Problema:** Hilo de renderizado podía leer `body` mientras `advance()` lo modificaba, causando `ArrayIndexOutOfBoundsException`.
+
+**Después (corregido):**
+```java
+public synchronized Deque<Position> snapshot() { 
+    return new ArrayDeque<>(body);
+}
+```
+
+**Corrección:**
+- Garantiza una **copia consistente** del estado de la serpiente
+- Previene `ConcurrentModificationException`
+- Usa el mismo lock que `advance()` para coordinación
+
+---
+
+##### **Sincronización de head() — Protege acceso a body** 
+
+**Después (corregido):**
+```java
+public synchronized Position head() { 
+    return body.peekFirst(); 
+}
+```
+
+**Corrección:**
+- Garantiza lectura atómica de la cabeza
+- Coordina con `advance()` que modifica `body`
+- Previene lecturas de estados intermedios inconsistentes
+
+#### **Justificación:**
+
+**¿Por qué `synchronized` en lugar de alternativas más complejas?**
+
+1. **Simplicidad:**
+   - `synchronized` es el mecanismo más simple y comprensible de Java
+   - No requiere imports adicionales ni clases complejas como `ReentrantLock`
+
+3. **Sin deadlock:**
+   - `Snake` solo sincroniza sus propios métodos
+   - No llama a métodos sincronizados de otras clases dentro del lock
+   - Orden de adquisición de locks: `Board` → `Snake` (siempre consistente)
+
+4. **Correctitud garantizada:**
+   - Todas las modificaciones y lecturas de `body` están protegidas
+   - `volatile direction` se mantiene para visibilidad adicional
+
+### **Optimización de Board para alto rendimiento con N serpientes(Region Critica)**
+
+### **Problema identificado: Lock muy robusto**
+
+**Implementación original:**
+```java
+public synchronized MoveResult step(Snake snake) {
+    // TODO el método sincronizado
+    // Solo 1 serpiente puede ejecutar step() a la vez
+}
+```
+
+**Cuello de botella:**
+- Con N serpientes, solo **1 puede moverse** simultáneamente
+- Las otras N-1 esperan el lock (contención alta)
+- **Escala linealmente mal**: Con +20 serpientes, el tiempo de espera se multiplica
+
+### **Solución implementada: Colecciones concurrentes + Lock ligero**
+
+### **Cambio 1: Usar colecciones thread-safe**
+
+```java
+private final Set<Position> mice = ConcurrentHashMap.newKeySet();
+private final Set<Position> obstacles = ConcurrentHashMap.newKeySet();
+private final Set<Position> turbo = ConcurrentHashMap.newKeySet();
+private final Map<Position, Position> teleports = new ConcurrentHashMap<>();
+```
+
+- **Lecturas concurrentes sin bloqueo**: `contains()` y `get()` no requieren locks
+- **Modificaciones seguras**: `add()`, `remove()` son atómicas y thread-safe
+- **Reducción de contención**: Múltiples serpientes pueden verificar y modificar
+- **Costo de rendimiento**: `ConcurrentHashMap` es altamente optimizado para concurrencia
+
+#### **Cambio 2: Lock explícito solo para operaciones críticas**
+
+```java
+private final ReentrantLock modificationLock = new ReentrantLock();
+
+public MoveResult step(Snake snake) {
+    // Fase 1: Cálculo (SIN LOCK) - paralelo
+    var head = snake.head();
+    var dir = snake.direction();
+    Position next = calculateNext(head, dir);
+    
+    // Fase 2: Verificación (SIN LOCK) - lectura concurrente
+    if (obstacles.contains(next)) return MoveResult.HIT_OBSTACLE;
+    
+    // Fase 3: Modificación (CON LOCK) - exclusión mutua solo aquí
+    modificationLock.lock();
+    try {
+        boolean ateMouse = mice.remove(next);
+        snake.advance(next, ateMouse); //El metodo advance() de Snake ya es sincronizado, así que no necesita lock adicional aquí
+        if (ateMouse) {
+            mice.add(randomEmpty());
+            obstacles.add(randomEmpty());
+        }
+    } finally {
+        modificationLock.unlock();
+    }
+    
+    return determineResult();
+}
+```
+- **Fase 1 y 2 sin lock**: Cálculo de siguiente posición y verificación de obstáculos se hacen sin bloqueo, permitiendo alta concurrencia
+- **Fase 3 con lock**: Solo la modificación del estado del tablero (comer ratón, avanzar serpiente) requiere exclusión mutua
+- **Mejora de rendimiento**: Reduce significativamente el tiempo que cada serpiente espera para moverse, especialmente con N grande
+
+
+### **¿Por qué NO se modificó SnakeRunner?**
+
+La clase `SnakeRunner` **NO requiere correcciones** porque:
+
+**Estado local al hilo:**
+   - `turboTicks` solo es accedido por el hilo propietario
+   - No hay acceso concurrente desde otros hilos
+
+**Interacción thread-safe:**
+   - Llama a `board.step()` (ya sincronizado)
+   - Llama a `snake.turn()` (ya sincronizado)
+
+`SnakeRunner` es seguro sin modificaciones.

@@ -5,16 +5,22 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.locks.ReentrantLock;
 
 public final class Board {
   private final int width;
   private final int height;
 
-  private final Set<Position> mice = new HashSet<>();
-  private final Set<Position> obstacles = new HashSet<>();
-  private final Set<Position> turbo = new HashSet<>();
-  private final Map<Position, Position> teleports = new HashMap<>();
+  // Colecciones concurrentes para mejor rendimiento con múltiples serpientes
+  private final Set<Position> mice = ConcurrentHashMap.newKeySet();
+  private final Set<Position> obstacles = ConcurrentHashMap.newKeySet();
+  private final Set<Position> turbo = ConcurrentHashMap.newKeySet();
+  private final Map<Position, Position> teleports = new ConcurrentHashMap<>();
+  
+  // Lock explícito solo para operaciones compuestas críticas
+  private final ReentrantLock modificationLock = new ReentrantLock();
 
   public enum MoveResult { MOVED, ATE_MOUSE, HIT_OBSTACLE, ATE_TURBO, TELEPORTED }
 
@@ -31,36 +37,57 @@ public final class Board {
   public int width() { return width; }
   public int height() { return height; }
 
-  public synchronized Set<Position> mice() { return new HashSet<>(mice); }
-  public synchronized Set<Position> obstacles() { return new HashSet<>(obstacles); }
-  public synchronized Set<Position> turbo() { return new HashSet<>(turbo); }
-  public synchronized Map<Position, Position> teleports() { return new HashMap<>(teleports); }
+  // Getters ya no necesitan synchronized - las colecciones son thread-safe
+  public Set<Position> mice() { return new HashSet<>(mice); }
+  public Set<Position> obstacles() { return new HashSet<>(obstacles); }
+  public Set<Position> turbo() { return new HashSet<>(turbo); }
+  public Map<Position, Position> teleports() { return new HashMap<>(teleports); }
 
-  public synchronized MoveResult step(Snake snake) {
+  public MoveResult step(Snake snake) {
     Objects.requireNonNull(snake, "snake");
+    
+    // Fase 1: Cálculo (sin lock) - cada serpiente puede calcular simultáneamente
     var head = snake.head();
     var dir = snake.direction();
     Position next = new Position(head.x() + dir.dx, head.y() + dir.dy).wrap(width, height);
 
+    // Fase 2: Verificación de obstáculos (lectura, sin lock) - ConcurrentHashMap permite lecturas concurrentes
     if (obstacles.contains(next)) return MoveResult.HIT_OBSTACLE;
 
+    // Verificar teleport (lectura, sin lock)
     boolean teleported = false;
-    if (teleports.containsKey(next)) {
-      next = teleports.get(next);
+    Position destination = teleports.get(next);
+    if (destination != null) {
+      next = destination;
       teleported = true;
     }
 
-    boolean ateMouse = mice.remove(next);
-    boolean ateTurbo = turbo.remove(next);
-
-    snake.advance(next, ateMouse);
-
-    if (ateMouse) {
-      mice.add(randomEmpty());
-      obstacles.add(randomEmpty());
-      if (ThreadLocalRandom.current().nextDouble() < 0.2) turbo.add(randomEmpty());
+    // Fase 3: Modificación crítica (con lock) - solo esta parte necesita exclusión mutua
+    boolean ateMouse = false;
+    boolean ateTurbo = false;
+    
+    modificationLock.lock();
+    try {
+      // Intentar consumir items - operación atómica
+      ateMouse = mice.remove(next);
+      ateTurbo = turbo.remove(next);
+      
+      // Avanzar serpiente dentro del lock para garantizar atomicidad
+      snake.advance(next, ateMouse);
+      
+      // Generar nuevos elementos si se comió un ratón
+      if (ateMouse) {
+        mice.add(randomEmpty());
+        obstacles.add(randomEmpty());
+        if (ThreadLocalRandom.current().nextDouble() < 0.2) {
+          turbo.add(randomEmpty());
+        }
+      }
+    } finally {
+      modificationLock.unlock();
     }
 
+    // Fase 4: Retornar resultado (sin lock)
     if (ateTurbo) return MoveResult.ATE_TURBO;
     if (ateMouse) return MoveResult.ATE_MOUSE;
     if (teleported) return MoveResult.TELEPORTED;
